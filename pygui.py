@@ -1,10 +1,31 @@
+import functools
 import queue
+import threading
 
 from tkinter import *
 from tkinter import ttk
 
+def in_gui_thread(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        if threading.current_thread() is not _gui_thread:
+            raise RuntimeError("Function must be called from GUI thread")
+        return func(*args, **kwargs)
+    return wrapper
+
+def in_gdb_thread(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        if threading.current_thread() is not _gdb_thread:
+            raise RuntimeError("Function must be called from GDB thread")
+        return func(*args, **kwargs)
+    return wrapper
+
+_gdb_thread = threading.current_thread()
+_gui_thread = None
 
 class DebuggerGUI:
+    @in_gdb_thread
     def __init__(self):
         self.root = None
         self.gui_alive = True
@@ -15,6 +36,8 @@ class DebuggerGUI:
         GuiThread(self).start()
 
     def build_gui(self):
+        global _gui_thread
+        _gui_thread = threading.current_thread()
         self.root = Tk()
         Tk.focus_force(self.root)
         self.bg_color = "#2d2d2d"
@@ -35,6 +58,7 @@ class DebuggerGUI:
 
         self.root.mainloop()
 
+    @in_gui_thread
     def setup_styles(self):
         self.style = ttk.Style()
         self.style.theme_use("clam")
@@ -46,6 +70,7 @@ class DebuggerGUI:
             background=[("active", "#505050")],
             foreground=[("active", "#ffffff")])
 
+    @in_gui_thread
     def create_toolbar(self):
         self.frm = ttk.Frame(self.root, padding=10)
         self.frm.grid(column=0, row=0, columnspan=5)
@@ -65,6 +90,7 @@ class DebuggerGUI:
             ttk.Button(self.frm, text=name, command=click_function).grid(column=col, row=0)
             col += 1
 
+    @in_gui_thread
     def create_source_view(self):
         self.line_numbers = Text(self.root, bg=self.bg_color, fg="#858585",
                     width=5, font=("Monospace", 11),
@@ -80,8 +106,9 @@ class DebuggerGUI:
         self.scrollbar.grid(column=5, row=2, sticky="ns")
         self.source_code.configure(yscrollcommand=self.on_text_scroll)
 
+    @in_gdb_thread
     def stop_handler(self, event):
-        if self.gui_alive:
+        if self.gui_alive and self.root is not None:
             frame = gdb.newest_frame().find_sal()
             self.event_queue.put({
                 'file_path': frame.symtab.fullname(),
@@ -89,9 +116,12 @@ class DebuggerGUI:
             })
             self.root.event_generate("<<StopEvent>>")
 
+    @in_gdb_thread
     def exit_handler(self, event):
-        self.root.event_generate("<<ExitEvent>>")
+        if self.root is not None:
+            self.root.event_generate("<<ExitEvent>>")
 
+    @in_gui_thread
     def action(self):
         file_info = self.event_queue.get()
         path = file_info['file_path']
@@ -99,6 +129,7 @@ class DebuggerGUI:
         self.lbl.config(text=path)
         self.update_source_code(path, line_number)
 
+    @in_gui_thread
     def update_source_code(self, path, line_number):
         self.source_code.delete("1.0", END)
         with open(path, "r") as file:
@@ -114,18 +145,22 @@ class DebuggerGUI:
             self.line_numbers.insert(END, f"{i}\n")
         self.line_numbers.config(state="disabled")
 
+    @in_gui_thread
     def on_close(self):
         self.gui_alive = False
         self.root.withdraw()
 
+    @in_gui_thread
     def on_scroll(self, *args):
         self.source_code.yview(*args)
         self.line_numbers.yview(*args)
 
+    @in_gui_thread
     def on_text_scroll(self, *args):
         self.scrollbar.set(*args)
         self.line_numbers.yview_moveto(args[0])
 
+    @in_gdb_thread
     def reopen(self):
         self.root.event_generate("<<ShowGui>>")
         self.gui_alive = True
