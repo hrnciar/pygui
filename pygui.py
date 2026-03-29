@@ -83,7 +83,6 @@ class DebuggerGUI:
             "next": lambda: gdb.post_event(lambda: gdb.execute("next&")),
             "finish": lambda: gdb.post_event(lambda: gdb.execute("finish&")),
             "run": lambda: gdb.post_event(lambda: gdb.execute("run&")),
-            "kill": lambda: gdb.post_event(lambda: gdb.execute("kill")),
         }
         col = 0
         for name, click_function in commands.items():
