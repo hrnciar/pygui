@@ -31,7 +31,9 @@ class DebuggerGUI:
         self.gui_alive = True
         self.event_queue = queue.Queue()
         gdb.events.stop.connect(self.stop_handler)
-        gdb.events.gdb_exiting.connect(self.exit_handler)
+        gdb.events.cont.connect(self.continue_handler)
+        gdb.events.gdb_exiting.connect(self.cleanup_handler)
+        gdb.events.exited.connect(self.exited_handler)
         gdb.execute("set confirm off")
         GuiThread(self).start()
 
@@ -50,10 +52,16 @@ class DebuggerGUI:
         self.setup_styles()
         self.create_toolbar()
         self.create_source_view()
+        self.create_statusbar()
 
-        self.root.bind('<<StopEvent>>', lambda e: self.action())
+        self.root.rowconfigure(2, weight=1)
+        self.root.columnconfigure(1, weight=1)
+
+        self.root.bind('<<StopEvent>>', lambda e: self.stop())
+        self.root.bind('<<ContinueEvent>>', lambda e: self.cont())
+        self.root.bind('<<ExitedEvent>>', lambda e: self.exited())
         self.root.bind('<<ShowGui>>', lambda e: self.root.deiconify())
-        self.root.bind('<<ExitEvent>>', lambda e: self.root.quit())
+        self.root.bind('<<CleanUpEvent>>', lambda e: self.root.quit())
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.root.mainloop()
@@ -74,8 +82,6 @@ class DebuggerGUI:
     def create_toolbar(self):
         self.frm = ttk.Frame(self.root, padding=10)
         self.frm.grid(column=0, row=0, columnspan=5)
-        self.lbl = ttk.Label(self.frm, text="Hello World!")
-        self.lbl.grid(column=0, row=1, columnspan=5)
         commands = {
             "continue": lambda: gdb.post_event(lambda: gdb.execute("continue&")),
             "interrupt": lambda: gdb.post_event(lambda: gdb.execute("interrupt&")),
@@ -99,34 +105,78 @@ class DebuggerGUI:
                     insertbackground=self.fg_color,
                     selectbackground=self.highlight_color,
                     font=("Monospace", 11))
-        self.source_code.grid(column=1, row=2, columnspan=4)
+        self.source_code.grid(column=1, row=2, sticky="nsew")
         self.source_code.tag_configure("current_line", background=self.highlight_color)
         self.scrollbar = Scrollbar(self.root, command=self.on_scroll)
         self.scrollbar.grid(column=5, row=2, sticky="ns")
         self.source_code.configure(yscrollcommand=self.on_text_scroll)
 
+    @in_gui_thread
+    def create_statusbar(self):
+        self.statusbar = Label(self.root, text="Idle", anchor="w")
+        self.statusbar.grid(column=0, row=3, columnspan=6, sticky="ew")
+
     @in_gdb_thread
     def stop_handler(self, event):
         if self.gui_alive and self.root is not None:
-            frame = gdb.newest_frame().find_sal()
+            if isinstance(event, gdb.BreakpointEvent):
+                reason = "breakpoint"
+            elif isinstance(event, gdb.SignalEvent):
+                reason = event.stop_signal
+            else:
+                reason = "step"
+            frame = gdb.newest_frame()
+            sal = frame.find_sal()
             self.event_queue.put({
-                'file_path': frame.symtab.fullname(),
-                'line_number': frame.line,
+                'file_path': sal.symtab.fullname(),
+                'file_name': sal.symtab.filename,
+                'line_number': sal.line,
+                'function_name': frame.name(),
+                'reason': reason
             })
             self.root.event_generate("<<StopEvent>>")
 
     @in_gdb_thread
-    def exit_handler(self, event):
+    def continue_handler(self, event):
+        if self.gui_alive and self.root is not None:
+            self.root.event_generate("<<ContinueEvent>>")
+
+    @in_gdb_thread
+    def cleanup_handler(self, event):
         if self.root is not None:
-            self.root.event_generate("<<ExitEvent>>")
+            self.root.event_generate("<<CleanUpEvent>>")
+
+    @in_gdb_thread
+    def exited_handler(self, event):
+        if self.gui_alive and self.root is not None:
+            self.event_queue.put({'exit_code': event.exit_code if hasattr(event, 'exit_code') else None})
+            try:
+                self.root.event_generate("<<ExitedEvent>>")
+            except RuntimeError:
+                pass
 
     @in_gui_thread
-    def action(self):
-        file_info = self.event_queue.get()
-        path = file_info['file_path']
-        line_number = file_info['line_number']
-        self.lbl.config(text=path)
+    def stop(self):
+        stop_info = self.event_queue.get()
+        path = stop_info['file_path']
+        line_number = stop_info['line_number']
+        function_name = stop_info['function_name']
+        file_name = stop_info['file_name']
+        reason = stop_info['reason']
         self.update_source_code(path, line_number)
+        self.statusbar.config(text=f"Stopped ({reason}) in {function_name}() at {file_name}:{line_number} - {path}")
+
+    @in_gui_thread
+    def cont(self):
+        self.statusbar.config(text=f"Running...")
+
+    @in_gui_thread
+    def exited(self):
+        exit_code = self.event_queue.get()['exit_code']
+        if exit_code is not None:
+            self.statusbar.config(text=f"Exited with exit code {exit_code}")
+        else:
+            self.statusbar.config(text=f"Program terminated")
 
     @in_gui_thread
     def update_source_code(self, path, line_number):
