@@ -31,6 +31,11 @@ class DebuggerGUI:
         self.gui_alive = True
         self.event_queue = queue.Queue()
         self.last_selected_frame_level = None
+        self.view_mode = "source"
+        self.current_path = None
+        self.current_line_number = None
+        self.current_disassembly = None
+        self.current_pc = None
         gdb.events.stop.connect(self.stop_handler)
         gdb.events.cont.connect(self.continue_handler)
         gdb.events.gdb_exiting.connect(self.cleanup_handler)
@@ -53,8 +58,9 @@ class DebuggerGUI:
         self.setup_styles()
 
         self.create_toolbar()
+        self.create_togglebar()
         self.paned_window = ttk.PanedWindow(self.root, orient=HORIZONTAL)
-        self.paned_window.grid(column=0, row=1, columnspan=1, sticky="nsew")
+        self.paned_window.grid(column=0, row=2, columnspan=1, sticky="nsew")
 
         self.left_pane = ttk.Frame(self.paned_window)
         self.right_pane = ttk.Frame(self.paned_window)
@@ -65,7 +71,7 @@ class DebuggerGUI:
         self.create_source_view(self.left_pane)
         self.create_backtrace_view(self.right_pane)
 
-        self.root.rowconfigure(1, weight=1)
+        self.root.rowconfigure(2, weight=1)
         self.root.columnconfigure(0, weight=1)
 
         self.root.bind('<<StopEvent>>', lambda e: self.stop())
@@ -81,6 +87,7 @@ class DebuggerGUI:
         self.paned_window.sashpos(0, 1200)
 
         self.root.mainloop()
+
     @in_gui_thread
     def setup_styles(self):
         self.style = ttk.Style()
@@ -97,18 +104,54 @@ class DebuggerGUI:
     @in_gui_thread
     def create_toolbar(self):
         self.frm = ttk.Frame(self.root, padding=5)
-        self.frm.grid(column=0, row=0, columnspan=7,sticky="ew")
+        self.frm.grid(column=0, row=0, sticky="ew")
         commands = {
             "continue": lambda: gdb.post_event(lambda: gdb.execute("continue&")),
             "interrupt": lambda: gdb.post_event(lambda: gdb.execute("interrupt&")),
             "step": lambda: gdb.post_event(lambda: gdb.execute("step&")),
             "next": lambda: gdb.post_event(lambda: gdb.execute("next&")),
+            "stepi": lambda: gdb.post_event(lambda: gdb.execute("stepi&")),
+            "nexti": lambda: gdb.post_event(lambda: gdb.execute("nexti&")),
             "finish": lambda: gdb.post_event(lambda: gdb.execute("finish&")),
             "run": lambda: gdb.post_event(lambda: gdb.execute("run&")),
         }
         col = 0
+        self.step_btn = None
+        self.next_btn = None
+        self.stepi_btn = None
+        self.nexti_btn = None
         for name, click_function in commands.items():
-            ttk.Button(self.frm, text=name, command=click_function).grid(column=col, row=0)
+            if name == "step":
+                self.step_btn = ttk.Button(self.frm, text=name, command=click_function, width=10)
+                self.step_btn.grid(column=2, row=0)
+            elif name == "next":
+                self.next_btn = ttk.Button(self.frm, text=name, command=click_function, width=10)
+                self.next_btn.grid(column=3, row=0)
+            elif name == "stepi":
+                self.stepi_btn = ttk.Button(self.frm, text=name, command=click_function, width=10)
+                self.stepi_btn.grid(column=2, row=0)
+                self.stepi_btn.grid_remove()
+                continue
+            elif name == "nexti":
+                self.nexti_btn = ttk.Button(self.frm, text=name, command=click_function, width=10)
+                self.nexti_btn.grid(column=3, row=0)
+                self.nexti_btn.grid_remove()
+                continue
+            else:
+                ttk.Button(self.frm, text=name, command=click_function, width=10).grid(column=col, row=0)
+            col += 1
+
+    @in_gui_thread
+    def create_togglebar(self):
+        self.toggle_frm = ttk.Frame(self.root, padding=5)
+        self.toggle_frm.grid(column=0, row=1, sticky="ew")
+        commands = {
+            "source": lambda: self.toggle_view("source"),
+            "asm": lambda: self.toggle_view("asm"),
+        }
+        col = 0
+        for name, click_function in commands.items():
+            ttk.Button(self.toggle_frm, text=name, command=click_function).grid(column=col, row=0)
             col += 1
 
     @in_gui_thread
@@ -129,6 +172,9 @@ class DebuggerGUI:
         self.scrollbar = ttk.Scrollbar(parent, command=self.on_scroll)
         self.scrollbar.grid(column=2, row=0, sticky="ns")
         self.source_code.configure(yscrollcommand=self.on_text_scroll)
+        self.line_numbers.bind("<MouseWheel>", lambda e: "break")
+        self.line_numbers.bind("<Button-4>", lambda e: "break")
+        self.line_numbers.bind("<Button-5>", lambda e: "break")
 
     @in_gui_thread
     def create_backtrace_view(self, parent):
@@ -152,7 +198,7 @@ class DebuggerGUI:
     def create_statusbar(self):
         self.root.columnconfigure(0, weight=1)
         self.statusbar = ttk.Label(self.root, text="Idle", anchor="w", style="Status.TLabel")
-        self.statusbar.grid(column=0, row=2, columnspan=1, sticky="ew")
+        self.statusbar.grid(column=0, row=3, columnspan=1, sticky="ew")
 
     @in_gdb_thread
     def stop_handler(self, event):
@@ -164,6 +210,7 @@ class DebuggerGUI:
             else:
                 reason = "step"
             frame = gdb.newest_frame()
+            disassembly_data, pc_value = self.get_disassembly_data(frame)
             frames = []
             frame_num = 0
             selected = gdb.selected_frame()
@@ -180,6 +227,8 @@ class DebuggerGUI:
                 })
                 frame = frame.older()
                 frame_num += 1
+            frames[0]['disassembly'] = disassembly_data
+            frames[0]['pc'] = pc_value
             self.event_queue.put(frames)
             self.root.event_generate("<<StopEvent>>")
 
@@ -220,6 +269,17 @@ class DebuggerGUI:
             except gdb.error:
                 pass
 
+    @in_gdb_thread
+    def get_disassembly_data(self, frame):
+        try:
+            block = gdb.block_for_pc(frame.pc())
+            while block.function is None:
+                block = block.superblock
+            disassembly_data = frame.architecture().disassemble(block.start, end_pc=block.end-1)
+            return disassembly_data, frame.pc()
+        except Exception:
+            return [], None
+
     @in_gui_thread
     def stop(self):
         stop_info = self.event_queue.get()
@@ -228,7 +288,14 @@ class DebuggerGUI:
         function_name = stop_info[0]['function_name']
         file_name = stop_info[0]['file_name']
         reason = stop_info[0]['reason']
-        self.update_source_code(path, line_number)
+        self.current_disassembly = stop_info[0]['disassembly']
+        self.current_pc = stop_info[0]['pc']
+        self.current_path = path
+        self.current_line_number = line_number
+        if self.view_mode == "source":
+            self.update_source_code(path, line_number)
+        elif self.view_mode == "asm":
+            self.update_disassembly_view(self.current_disassembly, self.current_pc)
         self.update_backtrace_view(stop_info)
         self.statusbar.config(text=f"Stopped ({reason}) in {function_name}() at {file_name}:{line_number} - {path}")
         self.last_selected_frame_level = 0
@@ -279,7 +346,7 @@ class DebuggerGUI:
                 file_content = file.read()
             self.source_code.insert("1.0", file_content)
             num_lines = len(file_content.splitlines())
-        except FileNotFoundError:
+        except (FileNotFoundError, TypeError):
             self.source_code.delete("1.0", END)
             self.source_code.insert("1.0", f"File not found: {path}")
         self.source_code.tag_remove("current_line", "1.0", END)
@@ -287,6 +354,7 @@ class DebuggerGUI:
         self.source_code.see(f"{line_number}.0")
         self.source_code.config(state="disabled")
         self.line_numbers.config(state="normal")
+        self.line_numbers.grid()
         self.line_numbers.delete("1.0", END)
         for i in range(1, num_lines + 1):
             self.line_numbers.insert(END, f"{i}\n")
@@ -303,6 +371,39 @@ class DebuggerGUI:
                 line = frame['frame_num'] + 1
                 self.backtrace.tag_add("current_line", f"{line}.0", f"{line}.end")
         self.backtrace.config(state="disabled")
+
+    @in_gui_thread
+    def update_disassembly_view(self, disassembly, pc):
+        self.source_code.config(state="normal")
+        self.source_code.delete("1.0", END)
+        current_line = 0
+        for i, instruction in enumerate(disassembly):
+            line_text = f"{hex(instruction['addr'])}  {instruction['asm']}\n"
+            self.source_code.insert(END, line_text)
+            if instruction['addr'] == pc:
+                current_line = i + 1
+        self.source_code.tag_remove("current_line", "1.0", END)
+        if current_line > 0:
+            self.source_code.tag_add("current_line", f"{current_line}.0", f"{current_line}.end")
+            self.source_code.see(f"{current_line}.0")
+        self.source_code.config(state="disabled")
+        self.line_numbers.grid_remove()
+
+    @in_gui_thread
+    def toggle_view(self, mode):
+        self.view_mode = mode
+        if mode == "source" and self.current_path:
+            self.step_btn.grid()
+            self.next_btn.grid()
+            self.stepi_btn.grid_remove()
+            self.nexti_btn.grid_remove()
+            self.update_source_code(self.current_path, self.current_line_number)
+        elif mode == "asm" and self.current_disassembly:
+            self.step_btn.grid_remove()
+            self.next_btn.grid_remove()
+            self.stepi_btn.grid()
+            self.nexti_btn.grid()
+            self.update_disassembly_view(self.current_disassembly, self.current_pc)
 
     @in_gui_thread
     def on_close(self):
