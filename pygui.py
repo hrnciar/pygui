@@ -178,12 +178,15 @@ class DebuggerGUI:
         self.source_code = Text(parent, bg=self.bg_color, fg=self.fg_color,
                     insertbackground=self.fg_color,
                     selectbackground=self.highlight_color,
-                    highlightthickness=0, bd=0,
+                    highlightthickness=0, bd=0, wrap = "none",
                     font=("Monospace", 11), state="disabled")
         self.source_code.grid(column=1, row=0, sticky="nsew")
         self.source_code.tag_configure("current_line", background=self.highlight_color)
         self.scrollbar = ttk.Scrollbar(parent, command=self.on_scroll)
         self.scrollbar.grid(column=2, row=0, sticky="ns")
+        self.h_scrollbar = ttk.Scrollbar(parent, orient=HORIZONTAL, command=self.source_code.xview)
+        self.h_scrollbar.grid(column=1, row=1, sticky="ew")
+        self.source_code.configure(xscrollcommand=self.h_scrollbar.set)
         self.source_code.configure(yscrollcommand=self.on_text_scroll)
         self.line_numbers.bind("<MouseWheel>", lambda e: "break")
         self.line_numbers.bind("<Button-4>", lambda e: "break")
