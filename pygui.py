@@ -53,8 +53,12 @@ class DebuggerGUI:
         self.fg_color = "#d4d4d4"
         self.highlight_color = "#264f78"
         self.root.configure(bg=self.bg_color)
-        self.root.geometry("1920x1080")
-        self.root.minsize(1200, 800)
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        width = min(int(screen_w * 0.75), int(screen_h * 16/9))
+        height = int(screen_h * 0.75)
+        self.root.geometry(f"{width}x{height}")
+        self.root.minsize(800, 600)
         self.setup_styles()
 
         self.create_toolbar()
@@ -84,7 +88,16 @@ class DebuggerGUI:
 
         # set the position of the sash divider
         self.root.update_idletasks()
-        self.paned_window.sashpos(0, 1200)
+        total_width = self.paned_window.winfo_width()
+        self.paned_window.sashpos(0, int(total_width * 0.65))
+
+        def on_resize(event):
+            if event.widget == self.root:
+                total_width = self.paned_window.winfo_width()
+                if total_width > 0:
+                    self.paned_window.sashpos(0, int(total_width * 0.65))
+
+        self.root.bind("<Configure>", on_resize)
 
         self.root.mainloop()
 
