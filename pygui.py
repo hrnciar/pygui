@@ -232,6 +232,7 @@ class DebuggerGUI:
             selected = gdb.selected_frame()
             while frame is not None:
                 sal = frame.find_sal()
+                disassembly_data, pc_value = self.get_disassembly_data(frame)
                 frames.append({
                     'frame_num': frame_num,
                     'function_name': frame.name(),
@@ -239,12 +240,12 @@ class DebuggerGUI:
                     'file_path': sal.symtab.fullname() if sal.symtab else None,
                     'line_number': sal.line,
                     'reason': reason,
-                    'is_selected': frame == selected
+                    'is_selected': frame == selected,
+                    'disassembly': disassembly_data,
+                    'pc': pc_value
                 })
                 frame = frame.older()
                 frame_num += 1
-            frames[0]['disassembly'] = disassembly_data
-            frames[0]['pc'] = pc_value
             self.event_queue.put(frames)
             self.root.event_generate("<<StopEvent>>")
 
@@ -337,7 +338,14 @@ class DebuggerGUI:
     def select_frame(self, frame_num):
         path = self.current_frames[frame_num]['file_path']
         line_number = self.current_frames[frame_num]['line_number']
-        self.update_source_code(path, line_number)
+        self.current_disassembly = self.current_frames[frame_num]['disassembly']
+        self.current_pc = self.current_frames[frame_num]['pc']
+        self.current_path = path
+        self.current_line_number = line_number
+        if self.view_mode == "source":
+            self.update_source_code(path, line_number)
+        elif self.view_mode == "asm":
+            self.update_disassembly_view(self.current_disassembly, self.current_pc)
         self.backtrace.config(state="normal")
         self.backtrace.tag_remove("current_line", "1.0", END)
         self.backtrace.tag_add("current_line", f"{frame_num + 1}.0", f"{frame_num + 1}.end")
