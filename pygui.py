@@ -36,6 +36,7 @@ class DebuggerGUI:
         self.current_line_number = None
         self.current_disassembly = None
         self.current_pc = None
+        self.current_breakpoints = []
         gdb.events.stop.connect(self.stop_handler)
         gdb.events.cont.connect(self.continue_handler)
         gdb.events.gdb_exiting.connect(self.cleanup_handler)
@@ -68,12 +69,24 @@ class DebuggerGUI:
 
         self.left_pane = ttk.Frame(self.paned_window)
         self.right_pane = ttk.Frame(self.paned_window)
+        self.right_pane.rowconfigure(0, weight=1)
+        self.right_pane.columnconfigure(0, weight=1)
         self.paned_window.add(self.left_pane)
         self.paned_window.add(self.right_pane)
 
         self.create_statusbar()
         self.create_source_view(self.left_pane)
-        self.create_backtrace_view(self.right_pane)
+
+        self.right_vertical_paned = ttk.PanedWindow(self.right_pane, orient=VERTICAL)
+        self.right_vertical_paned.grid(column=0, row=0, sticky="nsew")
+
+        self.backtrace_frame = ttk.Frame(self.right_vertical_paned)
+        self.breakpoint_frame = ttk.Frame(self.right_vertical_paned)
+        self.right_vertical_paned.add(self.backtrace_frame)
+        self.right_vertical_paned.add(self.breakpoint_frame)
+
+        self.create_backtrace_view(self.backtrace_frame)
+        self.create_breakpoint_view(self.breakpoint_frame)
 
         self.root.rowconfigure(2, weight=1)
         self.root.columnconfigure(0, weight=1)
@@ -84,6 +97,7 @@ class DebuggerGUI:
         self.root.bind('<<ShowGui>>', lambda e: self.root.deiconify())
         self.root.bind('<<CleanUpEvent>>', lambda e: self.root.quit())
         self.root.bind('<<FrameChangedEvent>>', lambda e: self.before_prompt())
+        self.root.bind("<<BreakpointChangedEvent>>", lambda e: self.on_breakpoints_changed())
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         # set the position of the sash divider
@@ -113,6 +127,8 @@ class DebuggerGUI:
             background=[("active", "#505050")],
             foreground=[("active", "#ffffff")])
         self.style.configure("Status.TLabel", background="#e1e1e1", foreground="#000000", font=("Sans", 9), padding=2)
+        self.style.configure("TCheckbutton", background=self.bg_color, foreground=self.fg_color, font=("Monospace", 10))
+        self.style.map("TCheckbutton", background=[("active", "#3c3c3c")], foreground=[("active", "#ffffff")])
 
     @in_gui_thread
     def create_toolbar(self):
@@ -175,6 +191,7 @@ class DebuggerGUI:
                     width=5, font=("Monospace", 11), highlightthickness=0, bd=0,
                     state="disabled")
         self.line_numbers.grid(column=0, row=0, sticky="ns")
+        self.line_numbers.tag_configure("breakpoint", background="#4b1c1c")
         self.source_code = Text(parent, bg=self.bg_color, fg=self.fg_color,
                     insertbackground=self.fg_color,
                     selectbackground=self.highlight_color,
@@ -188,6 +205,9 @@ class DebuggerGUI:
         self.h_scrollbar.grid(column=1, row=1, sticky="ew")
         self.source_code.configure(xscrollcommand=self.h_scrollbar.set)
         self.source_code.configure(yscrollcommand=self.on_text_scroll)
+        self.line_numbers.bind("<Button-1>", self.on_line_number_click)
+
+        # prevent line number scrolling independently from the source code
         self.line_numbers.bind("<MouseWheel>", lambda e: "break")
         self.line_numbers.bind("<Button-4>", lambda e: "break")
         self.line_numbers.bind("<Button-5>", lambda e: "break")
@@ -211,6 +231,34 @@ class DebuggerGUI:
         self.backtrace.bind("<Button-1>", self.on_backtrace_click)
 
     @in_gui_thread
+    def create_breakpoint_view(self, parent):
+        parent.rowconfigure(1, weight=1)
+        parent.columnconfigure(0, weight=1)
+
+        self.bp_label = ttk.Label(parent, text="Breakpoints")
+        self.bp_label.grid(row=0)
+
+        self.bp_canvas = Canvas(parent, bg=self.bg_color, highlightthickness=0)
+        self.bp_canvas.grid(column=0, row=1, sticky="nsew")
+
+        self.bp_scrollbar = ttk.Scrollbar(parent, orient=VERTICAL, command=self.bp_canvas.yview)
+        self.bp_scrollbar.grid(column=1, row=1, sticky="ns")
+        self.bp_canvas.configure(yscrollcommand=self.bp_scrollbar.set)
+
+        self.bp_inner_frame = Frame(self.bp_canvas, bg=self.bg_color)
+        self.bp_canvas_window = self.bp_canvas.create_window((0, 0), window=self.bp_inner_frame, anchor="nw")
+
+        # Update scroll region when the inner frame changes size
+        def on_frame_configure(event):
+            self.bp_canvas.configure(scrollregion=self.bp_canvas.bbox("all"))
+        self.bp_inner_frame.bind("<Configure>", on_frame_configure)
+
+        # Make the inner frame stretch to canvas width
+        def on_canvas_configure(event):
+            self.bp_canvas.itemconfig(self.bp_canvas_window, width=event.width)
+        self.bp_canvas.bind("<Configure>", on_canvas_configure)
+
+    @in_gui_thread
     def create_statusbar(self):
         self.root.columnconfigure(0, weight=1)
         self.statusbar = ttk.Label(self.root, text="Idle", anchor="w", style="Status.TLabel")
@@ -226,10 +274,10 @@ class DebuggerGUI:
             else:
                 reason = "step"
             frame = gdb.newest_frame()
-            disassembly_data, pc_value = self.get_disassembly_data(frame)
             frames = []
             frame_num = 0
             selected = gdb.selected_frame()
+            breakpoint_data = self.get_breakpoint_data()
             while frame is not None:
                 sal = frame.find_sal()
                 disassembly_data, pc_value = self.get_disassembly_data(frame)
@@ -246,7 +294,7 @@ class DebuggerGUI:
                 })
                 frame = frame.older()
                 frame_num += 1
-            self.event_queue.put(frames)
+            self.event_queue.put({'frames': frames, 'breakpoints': breakpoint_data})
             self.root.event_generate("<<StopEvent>>")
 
     @in_gdb_thread
@@ -281,10 +329,9 @@ class DebuggerGUI:
                         self.root.event_generate("<<FrameChangedEvent>>")
                     except RuntimeError:
                         pass
-                else:
-                    return
             except gdb.error:
                 pass
+            self.refresh_breakpoints()
 
     @in_gdb_thread
     def get_disassembly_data(self, frame):
@@ -297,9 +344,38 @@ class DebuggerGUI:
         except Exception:
             return [], None
 
+    @in_gdb_thread
+    def get_breakpoint_data(self):
+        breakpoint_data = []
+        try:
+            breakpoints = gdb.breakpoints()
+            if breakpoints:
+                for breakpoint in breakpoints:
+                    # breakpoint becomes invalid if user deletes it from GDB
+                    if breakpoint.is_valid():
+                        breakpoint_data.append({
+                            'number': breakpoint.number,
+                            'location': breakpoint.location,
+                            'enabled': breakpoint.enabled,
+                            'hit_count': breakpoint.hit_count,
+                        })
+        except Exception:
+            pass
+        return breakpoint_data
+
+    @in_gdb_thread
+    def refresh_breakpoints(self):
+        bp_data = self.get_breakpoint_data()
+        self.event_queue.put({'breakpoints': bp_data})
+        try:
+            self.root.event_generate("<<BreakpointChangedEvent>>")
+        except RuntimeError:
+            pass
+
     @in_gui_thread
     def stop(self):
-        stop_info = self.event_queue.get()
+        data = self.event_queue.get()
+        stop_info = data['frames']
         path = stop_info[0]['file_path']
         line_number = stop_info[0]['line_number']
         function_name = stop_info[0]['function_name']
@@ -309,6 +385,7 @@ class DebuggerGUI:
         self.current_pc = stop_info[0]['pc']
         self.current_path = path
         self.current_line_number = line_number
+        self.current_breakpoints = data['breakpoints']
         if self.view_mode == "source":
             self.update_source_code(path, line_number)
         elif self.view_mode == "asm":
@@ -316,6 +393,7 @@ class DebuggerGUI:
         self.update_backtrace_view(stop_info)
         self.statusbar.config(text=f"Stopped ({reason}) in {function_name}() at {file_name}:{line_number} - {path}")
         self.last_selected_frame_level = 0
+        self.update_breakpoint_view()
 
     @in_gui_thread
     def cont(self):
@@ -382,6 +460,15 @@ class DebuggerGUI:
         self.line_numbers.delete("1.0", END)
         for i in range(1, num_lines + 1):
             self.line_numbers.insert(END, f"{i}\n")
+        self.line_numbers.tag_remove("breakpoint", "1.0", END)
+        for bp in self.current_breakpoints:
+            try:
+                if bp['location']:
+                    file_path, bp_line = bp['location'].rsplit(':', 1)
+                    if file_path == path:
+                        self.line_numbers.tag_add("breakpoint", f"{bp_line}.0", f"{bp_line}.end")
+            except Exception:
+                pass
         self.line_numbers.config(state="disabled")
 
     @in_gui_thread
@@ -395,6 +482,35 @@ class DebuggerGUI:
                 line = frame['frame_num'] + 1
                 self.backtrace.tag_add("current_line", f"{line}.0", f"{line}.end")
         self.backtrace.config(state="disabled")
+
+    @in_gui_thread
+    def update_breakpoint_view(self):
+        self.bp_vars = []
+        for checkbox in self.bp_inner_frame.winfo_children():
+            checkbox.destroy()
+        for i, bp in enumerate(self.current_breakpoints):
+            bp_enabled = BooleanVar(value=bp['enabled'])
+            self.bp_vars.append(bp_enabled)
+            ttk.Checkbutton(self.bp_inner_frame,
+                text=f"#{bp['number']} {bp['location']} (hit:{bp['hit_count']})", #TODO: style?
+                command=lambda num=bp['number'], enabled_var=bp_enabled: self.toggle_breakpoint(num, enabled_var),
+                variable=bp_enabled).grid(column=0, row=i, sticky="w")
+
+    @in_gui_thread
+    def toggle_breakpoint(self, bp_number, bp_enabled):
+        new_state = bp_enabled.get()
+
+        def do_toggle():
+            try:
+                for bp in gdb.breakpoints():
+                    if bp.number == bp_number and bp.is_valid():
+                        bp.enabled = new_state
+                        self.refresh_breakpoints()
+                        break
+            except Exception:
+                pass
+
+        gdb.post_event(do_toggle)
 
     @in_gui_thread
     def update_disassembly_view(self, disassembly, pc):
@@ -443,6 +559,37 @@ class DebuggerGUI:
     def on_text_scroll(self, *args):
         self.scrollbar.set(*args)
         self.line_numbers.yview_moveto(args[0])
+
+    @in_gui_thread
+    def on_line_number_click(self, event):
+        if self.current_path is not None:
+            row = self.line_numbers.index(f"@{event.x},{event.y}").split('.')[0]
+            line_num = int(row)
+            path = self.current_path
+
+            def do_toggle():
+                try:
+                    existing = gdb.breakpoints()
+                    if existing:
+                        for breakpoint in existing:
+                            if breakpoint.is_valid() and breakpoint.location == f"{path}:{line_num}":
+                                breakpoint.delete()
+                                self.refresh_breakpoints()
+                                return
+                    gdb.Breakpoint(f"{path}:{line_num}")
+                    self.refresh_breakpoints()
+                except Exception:
+                    pass
+
+            gdb.post_event(do_toggle)
+
+    @in_gui_thread
+    def on_breakpoints_changed(self):
+        data = self.event_queue.get()
+        self.current_breakpoints = data['breakpoints']
+        self.update_breakpoint_view()
+        if self.view_mode == "source" and self.current_path:
+            self.update_source_code(self.current_path, self.current_line_number)
 
     @in_gdb_thread
     def reopen(self):
