@@ -221,6 +221,8 @@ class DebuggerGUI:
     def create_backtrace_view(self, parent):
         parent.rowconfigure(0, weight=1)
         parent.columnconfigure(0, weight=1)
+        self.bt_label = ttk.Label(parent, text="Backtrace")
+        self.bt_label.grid(row=0)
         self.backtrace = Text(parent, bg=self.bg_color, fg=self.fg_color,
                     insertbackground=self.fg_color,
                     selectbackground=self.highlight_color,
@@ -228,10 +230,10 @@ class DebuggerGUI:
                     font=("Monospace", 11),
                     padx=5, pady=5)
 
-        self.backtrace.grid(column=0, row=0, sticky="nsew")
+        self.backtrace.grid(column=0, row=1, sticky="nsew")
         self.backtrace.tag_configure("current_line", background=self.highlight_color)
         self.backtrace_scrollbar = ttk.Scrollbar(parent, orient=VERTICAL, command=self.backtrace.yview)
-        self.backtrace_scrollbar.grid(column=1, row=0, sticky="ns")
+        self.backtrace_scrollbar.grid(column=1, row=2, sticky="ns")
         self.backtrace.configure(yscrollcommand=self.backtrace_scrollbar.set)
         self.backtrace.bind("<Button-1>", self.on_backtrace_click)
 
