@@ -194,7 +194,9 @@ class DebuggerGUI:
                     width=5, font=("Monospace", 11), highlightthickness=0, bd=0,
                     state="disabled")
         self.line_numbers.grid(column=0, row=0, sticky="ns")
-        self.line_numbers.tag_configure("breakpoint", background="#4b1c1c")
+        self.line_numbers.tag_configure("breakpoint", background="#8b0000")
+        self.line_numbers.tag_configure("breakpoint_disabled", background="#605050")
+        self.line_numbers.tag_configure("breakpoint_pending", background="#6b6b00")
         self.source_code = Text(parent, bg=self.bg_color, fg=self.fg_color,
                     insertbackground=self.fg_color,
                     selectbackground=self.highlight_color,
@@ -469,14 +471,19 @@ class DebuggerGUI:
         for i in range(1, num_lines + 1):
             self.line_numbers.insert(END, f"{i}\n")
         self.line_numbers.tag_remove("breakpoint", "1.0", END)
+        self.line_numbers.tag_remove("breakpoint_disabled", "1.0", END)
+        self.line_numbers.tag_remove("breakpoint_pending", "1.0", END)
         for bp in self.current_breakpoints:
             try:
                 if bp['source_file'] and bp['source_file'] == path:
-                    self.line_numbers.tag_add("breakpoint", f"{bp['source_line']}.0", f"{bp['source_line']}.end")
+                    if bp['enabled']:
+                        self.line_numbers.tag_add("breakpoint", f"{bp['source_line']}.0", f"{bp['source_line']}.end")
+                    else:
+                        self.line_numbers.tag_add("breakpoint_disabled", f"{bp['source_line']}.0", f"{bp['source_line']}.end")
                 elif bp['location']:
                     file_path, bp_line = bp['location'].rsplit(':', 1)
                     if file_path == path and bp_line.isdigit():
-                        self.line_numbers.tag_add("breakpoint", f"{bp_line}.0", f"{bp_line}.end")
+                        self.line_numbers.tag_add("breakpoint_pending", f"{bp_line}.0", f"{bp_line}.end")
             except Exception:
                 pass
         self.line_numbers.config(state="disabled")
@@ -519,6 +526,7 @@ class DebuggerGUI:
                 for bp in gdb.breakpoints():
                     if bp.number == bp_number and bp.is_valid():
                         bp.enabled = new_state
+                        self.refresh_breakpoints()
                         break
             except Exception:
                 pass
