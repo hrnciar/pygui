@@ -29,7 +29,10 @@ class DebuggerGUI:
     def __init__(self):
         self.root = None
         self.gui_alive = True
-        self.event_queue = queue.Queue()
+        self.stop_queue = queue.Queue()
+        self.frame_queue = queue.Queue()
+        self.exit_queue = queue.Queue()
+        self.bp_queue = queue.Queue()
         self.last_selected_frame_level = None
         self.view_mode = "source"
         self.current_path = None
@@ -294,7 +297,7 @@ class DebuggerGUI:
                 })
                 frame = frame.older()
                 frame_num += 1
-            self.event_queue.put({'frames': frames, 'breakpoints': breakpoint_data})
+            self.stop_queue.put({'frames': frames, 'breakpoints': breakpoint_data})
             self.root.event_generate("<<StopEvent>>")
 
     @in_gdb_thread
@@ -310,7 +313,7 @@ class DebuggerGUI:
     @in_gdb_thread
     def exited_handler(self, event):
         if self.gui_alive and self.root is not None:
-            self.event_queue.put({'exit_code': event.exit_code if hasattr(event, 'exit_code') else None})
+            self.exit_queue.put({'exit_code': event.exit_code if hasattr(event, 'exit_code') else None})
             try:
                 self.root.event_generate("<<ExitedEvent>>")
             except RuntimeError:
@@ -324,7 +327,7 @@ class DebuggerGUI:
             try:
                 if self.last_selected_frame_level != gdb.selected_frame().level():
                     self.last_selected_frame_level = gdb.selected_frame().level()
-                    self.event_queue.put({'frame_level': self.last_selected_frame_level})
+                    self.frame_queue.put({'frame_level': self.last_selected_frame_level})
                     try:
                         self.root.event_generate("<<FrameChangedEvent>>")
                     except RuntimeError:
@@ -366,7 +369,7 @@ class DebuggerGUI:
     @in_gdb_thread
     def refresh_breakpoints(self):
         bp_data = self.get_breakpoint_data()
-        self.event_queue.put({'breakpoints': bp_data})
+        self.bp_queue.put({'breakpoints': bp_data})
         try:
             self.root.event_generate("<<BreakpointChangedEvent>>")
         except RuntimeError:
@@ -374,7 +377,7 @@ class DebuggerGUI:
 
     @in_gui_thread
     def stop(self):
-        data = self.event_queue.get()
+        data = self.stop_queue.get()
         stop_info = data['frames']
         path = stop_info[0]['file_path']
         line_number = stop_info[0]['line_number']
@@ -401,7 +404,7 @@ class DebuggerGUI:
 
     @in_gui_thread
     def exited(self):
-        exit_code = self.event_queue.get()['exit_code']
+        exit_code = self.exit_queue.get()['exit_code']
         if exit_code is not None:
             self.statusbar.config(text=f"Exited with exit code {exit_code}")
         else:
@@ -409,7 +412,7 @@ class DebuggerGUI:
 
     @in_gui_thread
     def before_prompt(self):
-        frame_num = self.event_queue.get()['frame_level']
+        frame_num = self.frame_queue.get()['frame_level']
         self.select_frame(frame_num)
 
     @in_gui_thread
@@ -585,7 +588,7 @@ class DebuggerGUI:
 
     @in_gui_thread
     def on_breakpoints_changed(self):
-        data = self.event_queue.get()
+        data = self.bp_queue.get()
         self.current_breakpoints = data['breakpoints']
         self.update_breakpoint_view()
         if self.view_mode == "source" and self.current_path:
