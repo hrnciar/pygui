@@ -356,11 +356,16 @@ class DebuggerGUI:
                 for breakpoint in breakpoints:
                     # breakpoint becomes invalid if user deletes it from GDB
                     if breakpoint.is_valid():
+                        source = None
+                        if breakpoint.locations:
+                            source = breakpoint.locations[0].source
                         breakpoint_data.append({
                             'number': breakpoint.number,
                             'location': breakpoint.location,
                             'enabled': breakpoint.enabled,
                             'hit_count': breakpoint.hit_count,
+                            'source_file': source[0] if source else None,
+                            'source_line': source[1] if source else None,
                         })
         except Exception:
             pass
@@ -466,9 +471,11 @@ class DebuggerGUI:
         self.line_numbers.tag_remove("breakpoint", "1.0", END)
         for bp in self.current_breakpoints:
             try:
-                if bp['location']:
+                if bp['source_file'] and bp['source_file'] == path:
+                    self.line_numbers.tag_add("breakpoint", f"{bp['source_line']}.0", f"{bp['source_line']}.end")
+                elif bp['location']:
                     file_path, bp_line = bp['location'].rsplit(':', 1)
-                    if file_path == path:
+                    if file_path == path and bp_line.isdigit():
                         self.line_numbers.tag_add("breakpoint", f"{bp_line}.0", f"{bp_line}.end")
             except Exception:
                 pass
@@ -494,8 +501,12 @@ class DebuggerGUI:
         for i, bp in enumerate(self.current_breakpoints):
             bp_enabled = BooleanVar(value=bp['enabled'])
             self.bp_vars.append(bp_enabled)
+            if bp['source_file'] and bp['source_file']:
+                bp_text=f"#{bp['number']} {bp['source_file']}:{bp['source_line']} (hit:{bp['hit_count']})",
+            else:
+                bp_text=f"#{bp['number']} {bp['location']} (hit:{bp['hit_count']})",
             ttk.Checkbutton(self.bp_inner_frame,
-                text=f"#{bp['number']} {bp['location']} (hit:{bp['hit_count']})", #TODO: style?
+                text=bp_text,
                 command=lambda num=bp['number'], enabled_var=bp_enabled: self.toggle_breakpoint(num, enabled_var),
                 variable=bp_enabled).grid(column=0, row=i, sticky="w")
 
@@ -508,7 +519,6 @@ class DebuggerGUI:
                 for bp in gdb.breakpoints():
                     if bp.number == bp_number and bp.is_valid():
                         bp.enabled = new_state
-                        self.refresh_breakpoints()
                         break
             except Exception:
                 pass
@@ -575,6 +585,12 @@ class DebuggerGUI:
                     existing = gdb.breakpoints()
                     if existing:
                         for breakpoint in existing:
+                            if breakpoint.locations:
+                                source = breakpoint.locations[0].source
+                                if source and source[0] == path and source[1] == line_num:
+                                    breakpoint.delete()
+                                    self.refresh_breakpoints()
+                                    return
                             if breakpoint.is_valid() and breakpoint.location == f"{path}:{line_num}":
                                 breakpoint.delete()
                                 self.refresh_breakpoints()
@@ -585,6 +601,7 @@ class DebuggerGUI:
                     pass
 
             gdb.post_event(do_toggle)
+        return "break"
 
     @in_gui_thread
     def on_breakpoints_changed(self):
