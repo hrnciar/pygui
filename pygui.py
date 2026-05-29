@@ -129,6 +129,11 @@ class DebuggerGUI:
         self.style.map("TButton",
             background=[("active", "#505050")],
             foreground=[("active", "#ffffff")])
+        self.style.configure("Active.TButton", background="#4a90d9", foreground="white")
+        self.style.map("Active.TButton",
+            background=[("active", "#4a90d9")],
+            foreground=[("active", "white")])
+        self.style.configure("Inactive.TButton", background="#3c3c3c", foreground="#ffffff")
         self.style.configure("Status.TLabel", background="#e1e1e1", foreground="#000000", font=("Sans", 9), padding=2)
         self.style.configure("TCheckbutton", background=self.bg_color, foreground=self.fg_color, font=("Monospace", 10))
         self.style.map("TCheckbutton", background=[("active", "#3c3c3c")], foreground=[("active", "#ffffff")])
@@ -175,16 +180,22 @@ class DebuggerGUI:
 
     @in_gui_thread
     def create_togglebar(self):
-        self.toggle_frm = ttk.Frame(self.root, padding=5)
-        self.toggle_frm.grid(column=0, row=1, sticky="ew")
-        commands = {
-            "source": lambda: self.toggle_view("source"),
-            "asm": lambda: self.toggle_view("asm"),
-        }
-        col = 0
-        for name, click_function in commands.items():
-            ttk.Button(self.toggle_frm, text=name, command=click_function).grid(column=col, row=0)
-            col += 1
+        self.toggle_frm = ttk.Frame(self.root, padding=10)
+        self.toggle_frm.grid(column=0, row=1, sticky="nsew", padx=10, pady=5)
+
+        self.source_btn = ttk.Button(
+            self.toggle_frm,
+            text="source",
+            command=lambda: self.toggle_view("source"),
+            style="Active.TButton")
+        self.source_btn.grid(column=0, row=0)
+
+        self.asm_btn = ttk.Button(
+            self.toggle_frm,
+            text="asm",
+            command=lambda: self.toggle_view("asm"),
+            style="Inactive.TButton")
+        self.asm_btn.grid(column=1, row=0)
 
     @in_gui_thread
     def create_source_view(self, parent):
@@ -561,12 +572,17 @@ class DebuggerGUI:
             self.stepi_btn.grid_remove()
             self.nexti_btn.grid_remove()
             self.update_source_code(self.current_path, self.current_line_number)
+            self.source_btn.configure(style="Active.TButton")
+            self.asm_btn.configure(style="Inactive.TButton")
+
         elif mode == "asm" and self.current_disassembly:
             self.step_btn.grid_remove()
             self.next_btn.grid_remove()
             self.stepi_btn.grid()
             self.nexti_btn.grid()
             self.update_disassembly_view(self.current_disassembly, self.current_pc)
+            self.asm_btn.configure(style="Active.TButton")
+            self.source_btn.configure(style="Inactive.TButton")
 
     @in_gui_thread
     def on_close(self):
