@@ -250,17 +250,22 @@ class DebuggerGUI:
 
     @in_gui_thread
     def create_breakpoint_view(self, parent):
-        parent.rowconfigure(1, weight=1)
+        parent.rowconfigure(3, weight=1)
         parent.columnconfigure(0, weight=1)
 
         self.bp_label = ttk.Label(parent, text="Breakpoints")
         self.bp_label.grid(row=0)
 
+        bp_btn_frame = ttk.Frame(parent)
+        bp_btn_frame.grid(column=0, row=2, sticky="w")
+        ttk.Button(bp_btn_frame, text="Disable All", command=lambda: self.set_all_breakpoints(False)).grid(column=0, row=0, padx=(0, 5))
+        ttk.Button(bp_btn_frame, text="Enable All", command=lambda: self.set_all_breakpoints(True)).grid(column=1, row=0)
+
         self.bp_canvas = Canvas(parent, bg=self.bg_color, highlightthickness=0)
-        self.bp_canvas.grid(column=0, row=1, sticky="nsew")
+        self.bp_canvas.grid(column=0, row=3, sticky="nsew")
 
         self.bp_scrollbar = ttk.Scrollbar(parent, orient=VERTICAL, command=self.bp_canvas.yview)
-        self.bp_scrollbar.grid(column=1, row=1, sticky="ns")
+        self.bp_scrollbar.grid(column=1, row=3, sticky="ns")
         self.bp_canvas.configure(yscrollcommand=self.bp_scrollbar.set)
 
         self.bp_inner_frame = Frame(self.bp_canvas, bg=self.bg_color)
@@ -545,6 +550,19 @@ class DebuggerGUI:
                 pass
 
         gdb.post_event(do_toggle)
+
+    @in_gui_thread
+    def set_all_breakpoints(self, enabled):
+        def do_set():
+            try:
+                for bp in gdb.breakpoints():
+                    if bp.is_valid():
+                        bp.enabled = enabled
+                self.refresh_breakpoints()
+            except Exception:
+                pass
+
+        gdb.post_event(do_set)
 
     @in_gui_thread
     def update_disassembly_view(self, disassembly, pc):
