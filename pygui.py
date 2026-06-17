@@ -108,13 +108,6 @@ class DebuggerGUI:
         total_width = self.paned_window.winfo_width()
         self.paned_window.sashpos(0, int(total_width * 0.65))
 
-        def on_resize(event):
-            if event.widget == self.root:
-                total_width = self.paned_window.winfo_width()
-                if total_width > 0:
-                    self.paned_window.sashpos(0, int(total_width * 0.65))
-
-        self.root.bind("<Configure>", on_resize)
 
         self.root.mainloop()
 
