@@ -45,7 +45,6 @@ class DebuggerGUI:
         gdb.events.gdb_exiting.connect(self.cleanup_handler)
         gdb.events.exited.connect(self.exited_handler)
         gdb.events.before_prompt.connect(self.before_prompt_handler)
-        gdb.execute("set confirm off")
         GuiThread(self).start()
 
     def build_gui(self):
