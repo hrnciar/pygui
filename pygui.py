@@ -265,13 +265,23 @@ class DebuggerGUI:
         self.bp_canvas_window = self.bp_canvas.create_window((0, 0), window=self.bp_inner_frame, anchor="nw")
 
         # Update scroll region when the inner frame changes size
+        self._bp_frame_configuring = False
         def on_frame_configure(event):
+            if self._bp_frame_configuring:
+                return
+            self._bp_frame_configuring = True
             self.bp_canvas.configure(scrollregion=self.bp_canvas.bbox("all"))
+            self._bp_frame_configuring = False
         self.bp_inner_frame.bind("<Configure>", on_frame_configure)
 
         # Make the inner frame stretch to canvas width
+        self._bp_configuring = False
         def on_canvas_configure(event):
+            if self._bp_configuring:
+                return
+            self._bp_configuring = True
             self.bp_canvas.itemconfig(self.bp_canvas_window, width=event.width)
+            self._bp_configuring = False
         self.bp_canvas.bind("<Configure>", on_canvas_configure)
 
     @in_gui_thread
