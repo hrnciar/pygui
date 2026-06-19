@@ -85,11 +85,14 @@ class DebuggerGUI:
 
         self.backtrace_frame = ttk.Frame(self.right_vertical_paned)
         self.breakpoint_frame = ttk.Frame(self.right_vertical_paned)
-        self.right_vertical_paned.add(self.backtrace_frame)
-        self.right_vertical_paned.add(self.breakpoint_frame)
+        self.locals_frame = ttk.Frame(self.right_vertical_paned)
+        self.right_vertical_paned.add(self.backtrace_frame, weight=1)
+        self.right_vertical_paned.add(self.breakpoint_frame, weight=2)
+        self.right_vertical_paned.add(self.locals_frame, weight=1)
 
         self.create_backtrace_view(self.backtrace_frame)
         self.create_breakpoint_view(self.breakpoint_frame)
+        self.create_locals_view(self.locals_frame)
 
         self.root.rowconfigure(2, weight=1)
         self.root.columnconfigure(0, weight=1)
@@ -223,7 +226,7 @@ class DebuggerGUI:
 
     @in_gui_thread
     def create_backtrace_view(self, parent):
-        parent.rowconfigure(0, weight=1)
+        parent.rowconfigure(1, weight=1)
         parent.columnconfigure(0, weight=1)
         self.bt_label = ttk.Label(parent, text="Backtrace")
         self.bt_label.grid(row=0)
@@ -232,12 +235,12 @@ class DebuggerGUI:
                     selectbackground=self.highlight_color,
                     highlightthickness=0, bd=0,
                     font=("Monospace", 11),
-                    padx=5, pady=5)
+                    padx=5, pady=5, height=5)
 
         self.backtrace.grid(column=0, row=1, sticky="nsew")
         self.backtrace.tag_configure("current_line", background=self.highlight_color)
         self.backtrace_scrollbar = ttk.Scrollbar(parent, orient=VERTICAL, command=self.backtrace.yview)
-        self.backtrace_scrollbar.grid(column=1, row=2, sticky="ns")
+        self.backtrace_scrollbar.grid(column=1, row=1, sticky="ns")
         self.backtrace.configure(yscrollcommand=self.backtrace_scrollbar.set)
         self.backtrace.bind("<Button-1>", self.on_backtrace_click)
 
@@ -285,6 +288,23 @@ class DebuggerGUI:
         self.bp_canvas.bind("<Configure>", on_canvas_configure)
 
     @in_gui_thread
+    def create_locals_view(self, parent):
+        parent.rowconfigure(1, weight=1)
+        parent.columnconfigure(0, weight=1)
+        self.locals_label = ttk.Label(parent, text="Locals")
+        self.locals_label.grid(row=0)
+        self.locals_text = Text(parent, bg=self.bg_color, fg=self.fg_color,
+                    insertbackground=self.fg_color,
+                    selectbackground=self.highlight_color,
+                    highlightthickness=0, bd=0,
+                    font=("Monospace", 11),
+                    padx=5, pady=5, height=5)
+        self.locals_text.grid(column=0, row=1, sticky="nsew")
+        self.locals_scrollbar = ttk.Scrollbar(parent, orient=VERTICAL, command=self.locals_text.yview)
+        self.locals_scrollbar.grid(column=1, row=1, sticky="ns")
+        self.locals_text.configure(yscrollcommand=self.locals_scrollbar.set, state="disabled")
+
+    @in_gui_thread
     def create_statusbar(self):
         self.root.columnconfigure(0, weight=1)
         self.statusbar = ttk.Label(self.root, text="Idle", anchor="w", style="Status.TLabel")
@@ -307,6 +327,7 @@ class DebuggerGUI:
             while frame is not None:
                 sal = frame.find_sal()
                 disassembly_data, pc_value = self.get_disassembly_data(frame)
+                locals_data = self.get_locals_data(frame)
                 frames.append({
                     'frame_num': frame_num,
                     'function_name': frame.name(),
@@ -316,7 +337,8 @@ class DebuggerGUI:
                     'reason': reason,
                     'is_selected': frame == selected,
                     'disassembly': disassembly_data,
-                    'pc': pc_value
+                    'pc': pc_value,
+                    'locals': locals_data
                 })
                 frame = frame.older()
                 frame_num += 1
@@ -395,6 +417,21 @@ class DebuggerGUI:
         return breakpoint_data
 
     @in_gdb_thread
+    def get_locals_data(self, frame):
+        locals_list = []
+        try:
+            block = frame.block()
+            for symbol in block:
+                if symbol.is_argument or symbol.is_variable:
+                    locals_list.append({
+                        'name': symbol.name,
+                        'value': str(symbol.value(frame))
+                    })
+        except Exception:
+            pass
+        return locals_list
+
+    @in_gdb_thread
     def refresh_breakpoints(self):
         bp_data = self.get_breakpoint_data()
         self.bp_queue.put({'breakpoints': bp_data})
@@ -425,6 +462,7 @@ class DebuggerGUI:
         self.statusbar.config(text=f"Stopped ({reason}) in {function_name}() at {file_name}:{line_number} - {path}")
         self.last_selected_frame_level = 0
         self.update_breakpoint_view()
+        self.update_locals_view(stop_info[0]['locals'])
 
     @in_gui_thread
     def cont(self):
@@ -459,6 +497,7 @@ class DebuggerGUI:
         self.backtrace.tag_remove("current_line", "1.0", END)
         self.backtrace.tag_add("current_line", f"{frame_num + 1}.0", f"{frame_num + 1}.end")
         self.backtrace.config(state="disabled")
+        self.update_locals_view(self.current_frames[frame_num]['locals'])
 
     @in_gui_thread
     def on_backtrace_click(self, event):
@@ -520,6 +559,14 @@ class DebuggerGUI:
                 line = frame['frame_num'] + 1
                 self.backtrace.tag_add("current_line", f"{line}.0", f"{line}.end")
         self.backtrace.config(state="disabled")
+
+    @in_gui_thread
+    def update_locals_view(self, locals_data):
+        self.locals_text.config(state="normal")
+        self.locals_text.delete("1.0", END)
+        for local in locals_data:
+            self.locals_text.insert(END, f"{local['name']}: {local['value']}\n")
+        self.locals_text.config(state="disabled")
 
     @in_gui_thread
     def update_breakpoint_view(self):
