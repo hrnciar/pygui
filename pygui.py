@@ -1,6 +1,7 @@
 import functools
 import queue
 import threading
+import time
 
 from tkinter import *
 from tkinter import ttk
@@ -40,6 +41,7 @@ class DebuggerGUI:
         self.current_disassembly = None
         self.current_pc = None
         self.current_breakpoints = []
+        self.current_frames = []
         gdb.events.stop.connect(self.stop_handler)
         gdb.events.cont.connect(self.continue_handler)
         gdb.events.gdb_exiting.connect(self.cleanup_handler)
@@ -103,13 +105,13 @@ class DebuggerGUI:
         self.root.bind('<<CleanUpEvent>>', lambda e: self.root.quit())
         self.root.bind('<<FrameChangedEvent>>', lambda e: self.before_prompt())
         self.root.bind("<<BreakpointChangedEvent>>", lambda e: self.on_breakpoints_changed())
+        self.root.bind('<<DisableGui>>', lambda e: self.on_close())
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         # set the position of the sash divider
         self.root.update_idletasks()
         total_width = self.paned_window.winfo_width()
         self.paned_window.sashpos(0, int(total_width * 0.65))
-
 
         self.root.mainloop()
 
@@ -318,31 +320,13 @@ class DebuggerGUI:
                 reason = event.stop_signal
             else:
                 reason = "step"
-            frame = gdb.newest_frame()
-            frames = []
-            frame_num = 0
-            selected = gdb.selected_frame()
+            frames = self.collect_frame_data(reason)
             breakpoint_data = self.get_breakpoint_data()
-            while frame is not None:
-                sal = frame.find_sal()
-                disassembly_data, pc_value = self.get_disassembly_data(frame)
-                locals_data = self.get_locals_data(frame)
-                frames.append({
-                    'frame_num': frame_num,
-                    'function_name': frame.name(),
-                    'file_name': sal.symtab.filename if sal.symtab else None,
-                    'file_path': sal.symtab.fullname() if sal.symtab else None,
-                    'line_number': sal.line,
-                    'reason': reason,
-                    'is_selected': frame == selected,
-                    'disassembly': disassembly_data,
-                    'pc': pc_value,
-                    'locals': locals_data
-                })
-                frame = frame.older()
-                frame_num += 1
             self.stop_queue.put({'frames': frames, 'breakpoints': breakpoint_data})
-            self.root.event_generate("<<StopEvent>>")
+            try:
+                self.root.event_generate("<<StopEvent>>")
+            except RuntimeError:
+                pass
 
     @in_gdb_thread
     def continue_handler(self, event):
@@ -362,6 +346,32 @@ class DebuggerGUI:
                 self.root.event_generate("<<ExitedEvent>>")
             except RuntimeError:
                 pass
+
+    @in_gdb_thread
+    def collect_frame_data(self, reason):
+        frame = gdb.newest_frame()
+        frames = []
+        frame_num = 0
+        selected = gdb.selected_frame()
+        while frame is not None:
+            sal = frame.find_sal()
+            disassembly_data, pc_value = self.get_disassembly_data(frame)
+            locals_data = self.get_locals_data(frame)
+            frames.append({
+                'frame_num': frame_num,
+                'function_name': frame.name(),
+                'file_name': sal.symtab.filename if sal.symtab else None,
+                'file_path': sal.symtab.fullname() if sal.symtab else None,
+                'line_number': sal.line,
+                'reason': reason,
+                'is_selected': frame == selected,
+                'disassembly': disassembly_data,
+                'pc': pc_value,
+                'locals': locals_data
+            })
+            frame = frame.older()
+            frame_num += 1
+        return frames
 
     # gdb.events.before_prompt fires when gdb is about to prompt the user for input
     # update gui only if the selected frame level has changed
@@ -439,6 +449,54 @@ class DebuggerGUI:
         except RuntimeError:
             pass
 
+    @in_gdb_thread
+    def refresh_current_state(self):
+        # Wait for the GUI to be initialized
+        while self.root is None:
+            time.sleep(0.1)
+
+        # When there is a running frame
+        try:
+            frames = self.collect_frame_data("step")
+            self.stop_queue.put({'frames': frames, 'breakpoints': self.get_breakpoint_data()})
+            self.root.event_generate("<<StopEvent>>")
+            return
+        except gdb.error:
+            pass
+
+        # When there is no running frame, get the main source file from the symbol table
+        main_symbol = gdb.lookup_global_symbol("main")
+        if main_symbol and main_symbol.symtab:
+            disassembly_data = []
+            pc_value = None
+            try:
+                block = gdb.block_for_pc(int(main_symbol.value().address))
+                while block.function is None:
+                    block = block.superblock
+                arch = gdb.selected_inferior().architecture()
+                disassembly_data = arch.disassemble(block.start, end_pc=block.end - 1)
+                pc_value = int(main_symbol.value().address)
+            except Exception:
+                pass
+            path = main_symbol.symtab.fullname()
+            line = main_symbol.line
+            self.stop_queue.put({'frames': [{
+                'frame_num': 0,
+                'function_name': 'main',
+                'file_name': main_symbol.symtab.filename,
+                'file_path': path,
+                'line_number': line,
+                'reason': 'initialization',
+                'is_selected': True,
+                'disassembly': disassembly_data,
+                'pc': pc_value,
+                'locals': [],
+            }], 'breakpoints': self.get_breakpoint_data()})
+            try:
+                self.root.event_generate("<<StopEvent>>")
+            except RuntimeError:
+                pass
+
     @in_gui_thread
     def stop(self):
         data = self.stop_queue.get()
@@ -458,7 +516,10 @@ class DebuggerGUI:
         elif self.view_mode == "asm":
             self.update_disassembly_view(self.current_disassembly, self.current_pc)
         self.update_backtrace_view(stop_info)
-        self.statusbar.config(text=f"Stopped ({reason}) in {function_name}() at {file_name}:{line_number} - {path}")
+        if reason == "initialization":
+            self.statusbar.config(text="Program not running. Use 'run' to begin.")
+        else:
+            self.statusbar.config(text=f"Stopped ({reason}) in {function_name}() at {file_name}:{line_number} - {path}")
         self.last_selected_frame_level = 0
         self.update_breakpoint_view()
         self.update_locals_view(stop_info[0]['locals'])
@@ -482,6 +543,8 @@ class DebuggerGUI:
 
     @in_gui_thread
     def select_frame(self, frame_num):
+        if not self.current_frames or frame_num >= len(self.current_frames):
+            return
         path = self.current_frames[frame_num]['file_path']
         line_number = self.current_frames[frame_num]['line_number']
         self.current_disassembly = self.current_frames[frame_num]['disassembly']
@@ -575,10 +638,10 @@ class DebuggerGUI:
         for i, bp in enumerate(self.current_breakpoints):
             bp_enabled = BooleanVar(value=bp['enabled'])
             self.bp_vars.append(bp_enabled)
-            if bp['source_file'] and bp['source_file']:
-                bp_text=f"#{bp['number']} {bp['source_file']}:{bp['source_line']} (hit:{bp['hit_count']})",
+            if bp['source_file'] and bp['source_line']:
+                bp_text=f"#{bp['number']} {bp['source_file']}:{bp['source_line']} (hit:{bp['hit_count']})"
             else:
-                bp_text=f"#{bp['number']} {bp['location']} (hit:{bp['hit_count']})",
+                bp_text=f"#{bp['number']} {bp['location']} (hit:{bp['hit_count']})"
             ttk.Checkbutton(self.bp_inner_frame,
                 text=bp_text,
                 command=lambda num=bp['number'], enabled_var=bp_enabled: self.toggle_breakpoint(num, enabled_var),
@@ -718,13 +781,38 @@ class GuiThread(gdb.Thread):
     def run(self):
         self.gui.build_gui()
 
+class GuiCommand (gdb.Command):
+    """GUI related commands."""
+    def __init__(self):
+        super().__init__ ("gui", gdb.COMMAND_USER, prefix=True)
 
-try:
-    debugger_gui
-except NameError:
-    debugger_gui = None
+    def invoke(self, arg, from_tty):
+        gdb.execute("help gui")
 
-if debugger_gui is None:
-    debugger_gui = DebuggerGUI()
-else:
-    debugger_gui.reopen()
+class GuiEnableCommand (gdb.Command):
+    """Enable the graphical debugger window."""
+    def __init__(self):
+        super().__init__ ("gui enable", gdb.COMMAND_USER)
+
+    def invoke(self, arg, from_tty):
+        global debugger_gui
+        if debugger_gui is None:
+            debugger_gui = DebuggerGUI()
+        else:
+            debugger_gui.reopen()
+        gdb.post_event(lambda: debugger_gui.refresh_current_state())
+
+class GuiDisableCommand (gdb.Command):
+    """Disable the graphical debugger window."""
+    def __init__(self):
+        super().__init__ ("gui disable", gdb.COMMAND_USER)
+
+    def invoke(self, arg, from_tty):
+        global debugger_gui
+        if debugger_gui is not None and debugger_gui.root is not None:
+            debugger_gui.root.event_generate("<<DisableGui>>")
+
+debugger_gui = None
+GuiCommand()
+GuiEnableCommand()
+GuiDisableCommand()
