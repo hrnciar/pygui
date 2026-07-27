@@ -751,7 +751,7 @@ class DebuggerGUI:
                                 breakpoint.delete()
                                 self.refresh_breakpoints()
                                 return
-                    gdb.Breakpoint(f"{path}:{line_num}", pending=False)
+                    gdb.Breakpoint(f"{path}:{line_num}", allow_pending=False)
                     self.refresh_breakpoints()
                 except Exception:
                     pass
