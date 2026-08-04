@@ -271,6 +271,9 @@ class DebuggerGUI:
             self._bp_configuring = False
         self.bp_canvas.bind("<Configure>", on_canvas_configure)
 
+        self.bp_canvas.bind("<MouseWheel>", self.on_mouse_wheel)
+        self.bp_inner_frame.bind("<MouseWheel>", self.on_mouse_wheel)
+
     @in_gui_thread
     def create_locals_view(self, parent):
         parent.rowconfigure(1, weight=1)
@@ -625,10 +628,12 @@ class DebuggerGUI:
                 bp_text=f"#{bp['number']} {bp['source_file']}:{bp['source_line']} (hit:{bp['hit_count']})"
             else:
                 bp_text=f"#{bp['number']} {bp['location']} (hit:{bp['hit_count']})"
-            ttk.Checkbutton(self.bp_inner_frame,
+            cb = ttk.Checkbutton(self.bp_inner_frame,
                 text=bp_text,
                 command=lambda num=bp['number'], enabled_var=bp_enabled: self.toggle_breakpoint(num, enabled_var),
-                variable=bp_enabled).grid(column=0, row=i, sticky="w")
+                variable=bp_enabled)
+            cb.grid(column=0, row=i, sticky="w")
+            cb.bind("<MouseWheel>", self.on_mouse_wheel)
 
     @in_gui_thread
     def toggle_breakpoint(self, bp_number, bp_enabled):
@@ -711,6 +716,10 @@ class DebuggerGUI:
     def on_text_scroll(self, *args):
         self.scrollbar.set(*args)
         self.line_numbers.yview_moveto(args[0])
+
+    @in_gui_thread
+    def on_mouse_wheel(self, event):
+        self.bp_canvas.yview_scroll(-1 * (event.delta // 120), "units")
 
     @in_gui_thread
     def on_line_number_click(self, event):
