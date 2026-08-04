@@ -139,41 +139,24 @@ class DebuggerGUI:
     def create_toolbar(self):
         self.frm = ttk.Frame(self.root, padding=5)
         self.frm.grid(column=0, row=0, sticky="ew")
-        commands = {
-            "continue": lambda: gdb.post_event(lambda: gdb.execute("continue&")),
-            "interrupt": lambda: gdb.post_event(lambda: gdb.execute("interrupt&")),
-            "step": lambda: gdb.post_event(lambda: gdb.execute("step&")),
-            "next": lambda: gdb.post_event(lambda: gdb.execute("next&")),
-            "stepi": lambda: gdb.post_event(lambda: gdb.execute("stepi&")),
-            "nexti": lambda: gdb.post_event(lambda: gdb.execute("nexti&")),
-            "finish": lambda: gdb.post_event(lambda: gdb.execute("finish&")),
-            "run": lambda: gdb.post_event(lambda: gdb.execute("run&")),
-        }
-        col = 0
-        self.step_btn = None
-        self.next_btn = None
-        self.stepi_btn = None
-        self.nexti_btn = None
-        for name, click_function in commands.items():
-            if name == "step":
-                self.step_btn = ttk.Button(self.frm, text=name, command=click_function, width=10)
-                self.step_btn.grid(column=2, row=0)
-            elif name == "next":
-                self.next_btn = ttk.Button(self.frm, text=name, command=click_function, width=10)
-                self.next_btn.grid(column=3, row=0)
-            elif name == "stepi":
-                self.stepi_btn = ttk.Button(self.frm, text=name, command=click_function, width=10)
-                self.stepi_btn.grid(column=2, row=0)
-                self.stepi_btn.grid_remove()
-                continue
-            elif name == "nexti":
-                self.nexti_btn = ttk.Button(self.frm, text=name, command=click_function, width=10)
-                self.nexti_btn.grid(column=3, row=0)
-                self.nexti_btn.grid_remove()
-                continue
-            else:
-                ttk.Button(self.frm, text=name, command=click_function, width=10).grid(column=col, row=0)
-            col += 1
+
+        def gdb_cmd(cmd):
+            return lambda: gdb.post_event(lambda: gdb.execute(f"{cmd}&"))
+
+        ttk.Button(self.frm, text="continue", command=gdb_cmd("continue"), width=10).grid(column=0, row=0)
+        ttk.Button(self.frm, text="interrupt", command=gdb_cmd("interrupt"), width=10).grid(column=1, row=0)
+        self.step_btn = ttk.Button(self.frm, text="step", command=gdb_cmd("step"), width=10)
+        self.step_btn.grid(column=2, row=0)
+        self.next_btn = ttk.Button(self.frm, text="next", command=gdb_cmd("next"), width=10)
+        self.next_btn.grid(column=3, row=0)
+        self.stepi_btn = ttk.Button(self.frm, text="stepi", command=gdb_cmd("stepi"), width=10)
+        self.stepi_btn.grid(column=2, row=0)
+        self.stepi_btn.grid_remove()
+        self.nexti_btn = ttk.Button(self.frm, text="nexti", command=gdb_cmd("nexti"), width=10)
+        self.nexti_btn.grid(column=3, row=0)
+        self.nexti_btn.grid_remove()
+        ttk.Button(self.frm, text="finish", command=gdb_cmd("finish"), width=10).grid(column=4, row=0)
+        ttk.Button(self.frm, text="run", command=gdb_cmd("run"), width=10).grid(column=5, row=0)
 
     @in_gui_thread
     def create_togglebar(self):
