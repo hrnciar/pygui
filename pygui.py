@@ -113,6 +113,8 @@ class DebuggerGUI:
         total_width = self.paned_window.winfo_width()
         self.paned_window.sashpos(0, int(total_width * 0.65))
 
+        self.set_toolbar_state("idle")
+
         self.root.mainloop()
 
     @in_gui_thread
@@ -124,8 +126,8 @@ class DebuggerGUI:
         self.style.configure("TLabel", background=self.bg_color, foreground=self.fg_color)
         self.style.configure("TButton", background="#3c3c3c", foreground="#ffffff", padding=5)
         self.style.map("TButton",
-            background=[("active", "#505050")],
-            foreground=[("active", "#ffffff")])
+            background=[("disabled", "#2d2d2d"), ("active", "#505050")],
+            foreground=[("disabled", "#666666"), ("active", "#ffffff")])
         self.style.configure("Active.TButton", background="#4a90d9", foreground="white")
         self.style.map("Active.TButton",
             background=[("active", "#4a90d9")],
@@ -143,8 +145,10 @@ class DebuggerGUI:
         def gdb_cmd(cmd):
             return lambda: gdb.post_event(lambda: gdb.execute(f"{cmd}&"))
 
-        ttk.Button(self.frm, text="continue", command=gdb_cmd("continue"), width=10).grid(column=0, row=0)
-        ttk.Button(self.frm, text="interrupt", command=gdb_cmd("interrupt"), width=10).grid(column=1, row=0)
+        self.continue_btn = ttk.Button(self.frm, text="continue", command=gdb_cmd("continue"), width=10)
+        self.continue_btn.grid(column=0, row=0)
+        self.interrupt_btn = ttk.Button(self.frm, text="interrupt", command=gdb_cmd("interrupt"), width=10)
+        self.interrupt_btn.grid(column=1, row=0)
         self.step_btn = ttk.Button(self.frm, text="step", command=gdb_cmd("step"), width=10)
         self.step_btn.grid(column=2, row=0)
         self.next_btn = ttk.Button(self.frm, text="next", command=gdb_cmd("next"), width=10)
@@ -155,8 +159,27 @@ class DebuggerGUI:
         self.nexti_btn = ttk.Button(self.frm, text="nexti", command=gdb_cmd("nexti"), width=10)
         self.nexti_btn.grid(column=3, row=0)
         self.nexti_btn.grid_remove()
-        ttk.Button(self.frm, text="finish", command=gdb_cmd("finish"), width=10).grid(column=4, row=0)
-        ttk.Button(self.frm, text="run", command=gdb_cmd("run"), width=10).grid(column=5, row=0)
+        self.finish_btn = ttk.Button(self.frm, text="finish", command=gdb_cmd("finish"), width=10)
+        self.finish_btn.grid(column=4, row=0)
+        self.run_btn = ttk.Button(self.frm, text="run", command=gdb_cmd("run"), width=10)
+        self.run_btn.grid(column=5, row=0)
+
+    @in_gui_thread
+    def set_toolbar_state(self, state):
+        self.toolbar_buttons = [self.run_btn, self.continue_btn, self.interrupt_btn,
+                        self.step_btn, self.next_btn, self.stepi_btn,
+                        self.nexti_btn, self.finish_btn]
+        enabled_for = {
+            "idle":     {self.run_btn},
+            "running":  {self.interrupt_btn},
+            "stopped":  {self.run_btn, self.continue_btn, self.step_btn, self.next_btn,
+                        self.stepi_btn, self.nexti_btn, self.finish_btn},
+        }
+
+        for button in self.toolbar_buttons:
+            button.configure(state="disabled")
+        for button in enabled_for[state]:
+            button.configure(state="!disabled")
 
     @in_gui_thread
     def create_togglebar(self):
@@ -504,8 +527,10 @@ class DebuggerGUI:
         self.update_backtrace_view(stop_info)
         if reason == "initialization":
             self.statusbar.config(text="Program not running. Use 'run' to begin.")
+            self.set_toolbar_state("idle")
         else:
             self.statusbar.config(text=f"Stopped ({reason}) in {function_name}() at {file_name}:{line_number} - {path}")
+            self.set_toolbar_state("stopped")
         self.last_selected_frame_level = 0
         self.update_breakpoint_view()
         self.update_locals_view(stop_info[0]['locals'])
@@ -513,6 +538,7 @@ class DebuggerGUI:
     @in_gui_thread
     def cont(self):
         self.statusbar.config(text=f"Running...")
+        self.set_toolbar_state("running")
 
     @in_gui_thread
     def exited(self):
@@ -521,6 +547,7 @@ class DebuggerGUI:
             self.statusbar.config(text=f"Exited with exit code {exit_code}")
         else:
             self.statusbar.config(text=f"Program terminated")
+        self.set_toolbar_state("idle")
 
     @in_gui_thread
     def before_prompt(self):
