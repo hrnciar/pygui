@@ -785,7 +785,11 @@ class DebuggerGUI:
                                 breakpoint.delete()
                                 self.refresh_breakpoints()
                                 return
-                    gdb.Breakpoint(f"{path}:{line_num}", allow_pending=False)
+                    # allow_pending is a new parameter in GDB's Python API
+                    # it is temporarily disable so the script can be tested
+                    # with the current GDB
+                    # gdb.Breakpoint(f"{path}:{line_num}", allow_pending=False)
+                    gdb.Breakpoint(f"{path}:{line_num}")
                     self.refresh_breakpoints()
                 except Exception:
                     pass
