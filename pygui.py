@@ -14,6 +14,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import functools
+import os
 import queue
 import threading
 import time
@@ -57,6 +58,7 @@ class DebuggerGUI:
         self.current_pc = None
         self.current_breakpoints = []
         self.current_frames = []
+        self.loaded_key = None
         gdb.events.stop.connect(self.stop_handler)
         gdb.events.cont.connect(self.continue_handler)
         gdb.events.gdb_exiting.connect(self.cleanup_handler)
@@ -622,6 +624,14 @@ class DebuggerGUI:
 
     @in_gui_thread
     def update_source_code(self, path, line_number):
+        key = self.source_key(path)
+        if key is None or key != self.loaded_key:
+            self.render_source(path)
+        self.mark_current_line(line_number)
+        self.mark_breakpoints(path)
+
+    @in_gui_thread
+    def render_source(self, path):
         self.source_code.config(state="normal")
         self.source_code.delete("1.0", END)
         num_lines = 0
@@ -630,18 +640,21 @@ class DebuggerGUI:
                 file_content = file.read()
             self.source_code.insert("1.0", file_content)
             num_lines = len(file_content.splitlines())
-        except (FileNotFoundError, TypeError):
+            self.loaded_key = self.source_key(path)
+        except (OSError, ValueError, TypeError):
             self.source_code.delete("1.0", END)
-            self.source_code.insert("1.0", f"File not found: {path}")
-        self.source_code.tag_remove("current_line", "1.0", END)
-        self.source_code.tag_add("current_line", f"{line_number}.0", f"{line_number}.end")
-        self.source_code.see(f"{line_number}.0")
-        self.source_code.config(state="disabled")
+            self.source_code.insert("1.0", f"Cannot display: {path}")
+            self.loaded_key = None
         self.line_numbers.config(state="normal")
         self.line_numbers.grid()
         self.line_numbers.delete("1.0", END)
         for i in range(1, num_lines + 1):
             self.line_numbers.insert(END, f"{i}\n")
+        self.line_numbers.config(state="disabled")
+        self.source_code.config(state="disabled")
+
+    @in_gui_thread
+    def mark_breakpoints(self, path):
         self.line_numbers.tag_remove("breakpoint", "1.0", END)
         self.line_numbers.tag_remove("breakpoint_disabled", "1.0", END)
         self.line_numbers.tag_remove("breakpoint_pending", "1.0", END)
@@ -658,7 +671,19 @@ class DebuggerGUI:
                         self.line_numbers.tag_add("breakpoint_pending", f"{bp_line}.0", f"{bp_line}.end")
             except Exception:
                 pass
-        self.line_numbers.config(state="disabled")
+
+    @in_gui_thread
+    def mark_current_line(self, line_number):
+        self.source_code.tag_remove("current_line", "1.0", END)
+        self.source_code.tag_add("current_line", f"{line_number}.0", f"{line_number}.end")
+        self.source_code.see(f"{line_number}.0")
+
+    @in_gui_thread
+    def source_key(self, path):
+        try:
+            return path, os.stat(path).st_mtime
+        except (OSError, TypeError):
+            return None
 
     @in_gui_thread
     def update_backtrace_view(self, stop_info):
@@ -765,6 +790,7 @@ class DebuggerGUI:
             self.update_disassembly_view(self.current_disassembly, self.current_pc)
             self.asm_btn.configure(style="Active.TButton")
             self.source_btn.configure(style="Inactive.TButton")
+            self.loaded_key = None
 
     @in_gui_thread
     def on_close(self):
@@ -825,7 +851,7 @@ class DebuggerGUI:
         self.current_breakpoints = data['breakpoints']
         self.update_breakpoint_view()
         if self.view_mode == "source" and self.current_path:
-            self.update_source_code(self.current_path, self.current_line_number)
+            self.mark_breakpoints(self.current_path)
 
     @in_gdb_thread
     def reopen(self):
