@@ -14,12 +14,14 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import functools
+import gdb
 import os
 import queue
 import threading
-import time
+import tkinter
+import traceback
 
-from tkinter import *
+from tkinter import BooleanVar, Canvas, END, Frame, HORIZONTAL, Text, Tk, VERTICAL
 from tkinter import ttk
 
 def in_gui_thread(func):
@@ -59,78 +61,92 @@ class DebuggerGUI:
         self.current_breakpoints = []
         self.current_frames = []
         self.loaded_key = None
-        gdb.events.stop.connect(self.stop_handler)
-        gdb.events.cont.connect(self.continue_handler)
-        gdb.events.gdb_exiting.connect(self.cleanup_handler)
-        gdb.events.exited.connect(self.exited_handler)
-        gdb.events.before_prompt.connect(self.before_prompt_handler)
+        self.startup_done = threading.Event()
+        self.startup_error = None
+        self.startup_traceback = None
         GuiThread(self).start()
 
     def build_gui(self):
         global _gui_thread
         _gui_thread = threading.current_thread()
-        self.root = Tk()
-        Tk.focus_force(self.root)
-        self.bg_color = "#2d2d2d"
-        self.fg_color = "#d4d4d4"
-        self.highlight_color = "#264f78"
-        self.root.configure(bg=self.bg_color)
-        screen_w = self.root.winfo_screenwidth()
-        screen_h = self.root.winfo_screenheight()
-        width = min(int(screen_w * 0.75), int(screen_h * 16/9))
-        height = int(screen_h * 0.75)
-        self.root.geometry(f"{width}x{height}")
-        self.root.minsize(800, 600)
-        self.setup_styles()
+        try:
+            self.root = Tk()
+            Tk.focus_force(self.root)
+            self.bg_color = "#2d2d2d"
+            self.fg_color = "#d4d4d4"
+            self.highlight_color = "#264f78"
+            self.root.configure(bg=self.bg_color)
+            screen_w = self.root.winfo_screenwidth()
+            screen_h = self.root.winfo_screenheight()
+            width = min(int(screen_w * 0.75), int(screen_h * 16/9))
+            height = int(screen_h * 0.75)
+            self.root.geometry(f"{width}x{height}")
+            self.root.minsize(800, 600)
+            self.setup_styles()
 
-        self.create_toolbar()
-        self.create_togglebar()
-        self.paned_window = ttk.PanedWindow(self.root, orient=HORIZONTAL)
-        self.paned_window.grid(column=0, row=2, columnspan=1, sticky="nsew")
+            self.create_toolbar()
+            self.create_togglebar()
+            self.paned_window = ttk.PanedWindow(self.root, orient=HORIZONTAL)
+            self.paned_window.grid(column=0, row=2, columnspan=1, sticky="nsew")
 
-        self.left_pane = ttk.Frame(self.paned_window)
-        self.right_pane = ttk.Frame(self.paned_window)
-        self.right_pane.rowconfigure(0, weight=1)
-        self.right_pane.columnconfigure(0, weight=1)
-        self.paned_window.add(self.left_pane)
-        self.paned_window.add(self.right_pane)
+            self.left_pane = ttk.Frame(self.paned_window)
+            self.right_pane = ttk.Frame(self.paned_window)
+            self.right_pane.rowconfigure(0, weight=1)
+            self.right_pane.columnconfigure(0, weight=1)
+            self.paned_window.add(self.left_pane)
+            self.paned_window.add(self.right_pane)
 
-        self.create_statusbar()
-        self.create_source_view(self.left_pane)
+            self.create_statusbar()
+            self.create_source_view(self.left_pane)
 
-        self.right_vertical_paned = ttk.PanedWindow(self.right_pane, orient=VERTICAL)
-        self.right_vertical_paned.grid(column=0, row=0, sticky="nsew")
+            self.right_vertical_paned = ttk.PanedWindow(self.right_pane, orient=VERTICAL)
+            self.right_vertical_paned.grid(column=0, row=0, sticky="nsew")
 
-        self.backtrace_frame = ttk.Frame(self.right_vertical_paned)
-        self.breakpoint_frame = ttk.Frame(self.right_vertical_paned)
-        self.locals_frame = ttk.Frame(self.right_vertical_paned)
-        self.right_vertical_paned.add(self.backtrace_frame, weight=1)
-        self.right_vertical_paned.add(self.breakpoint_frame, weight=2)
-        self.right_vertical_paned.add(self.locals_frame, weight=1)
+            self.backtrace_frame = ttk.Frame(self.right_vertical_paned)
+            self.breakpoint_frame = ttk.Frame(self.right_vertical_paned)
+            self.locals_frame = ttk.Frame(self.right_vertical_paned)
+            self.right_vertical_paned.add(self.backtrace_frame, weight=1)
+            self.right_vertical_paned.add(self.breakpoint_frame, weight=2)
+            self.right_vertical_paned.add(self.locals_frame, weight=1)
 
-        self.create_backtrace_view(self.backtrace_frame)
-        self.create_breakpoint_view(self.breakpoint_frame)
-        self.create_locals_view(self.locals_frame)
+            self.create_backtrace_view(self.backtrace_frame)
+            self.create_breakpoint_view(self.breakpoint_frame)
+            self.create_locals_view(self.locals_frame)
 
-        self.root.rowconfigure(2, weight=1)
-        self.root.columnconfigure(0, weight=1)
+            self.root.rowconfigure(2, weight=1)
+            self.root.columnconfigure(0, weight=1)
 
-        self.root.bind('<<StopEvent>>', lambda e: self.stop())
-        self.root.bind('<<ContinueEvent>>', lambda e: self.cont())
-        self.root.bind('<<ExitedEvent>>', lambda e: self.exited())
-        self.root.bind('<<ShowGui>>', lambda e: self.root.deiconify())
-        self.root.bind('<<CleanUpEvent>>', lambda e: self.root.quit())
-        self.root.bind('<<FrameChangedEvent>>', lambda e: self.before_prompt())
-        self.root.bind("<<BreakpointChangedEvent>>", lambda e: self.on_breakpoints_changed())
-        self.root.bind('<<DisableGui>>', lambda e: self.on_close())
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+            self.root.bind('<<StopEvent>>', lambda e: self.stop())
+            self.root.bind('<<ContinueEvent>>', lambda e: self.cont())
+            self.root.bind('<<ExitedEvent>>', lambda e: self.exited())
+            self.root.bind('<<ShowGui>>', lambda e: self.root.deiconify())
+            self.root.bind('<<CleanUpEvent>>', lambda e: self.root.quit())
+            self.root.bind('<<FrameChangedEvent>>', lambda e: self.before_prompt())
+            self.root.bind("<<BreakpointChangedEvent>>", lambda e: self.on_breakpoints_changed())
+            self.root.bind('<<DisableGui>>', lambda e: self.on_close())
+            self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        # set the position of the sash divider
-        self.root.update_idletasks()
-        total_width = self.paned_window.winfo_width()
-        self.paned_window.sashpos(0, int(total_width * 0.65))
+            # set the position of the sash divider
+            self.root.update_idletasks()
+            total_width = self.paned_window.winfo_width()
+            self.paned_window.sashpos(0, int(total_width * 0.65))
 
-        self.set_toolbar_state("idle")
+            self.set_toolbar_state("idle")
+        except Exception as e:
+            self.startup_error = e
+            if not isinstance(e, tkinter.TclError):
+                self.startup_traceback = traceback.format_exc()
+            if self.root is not None:
+                try:
+                    self.root.destroy()
+                except tkinter.TclError:
+                    # The display is already gone. startup_error above holds the
+                    # failure worth reporting; don't let cleanup overwrite it.
+                    pass
+                self.root = None
+            return
+        finally:
+            self.startup_done.set()
 
         self.root.mainloop()
 
@@ -338,6 +354,14 @@ class DebuggerGUI:
         self.statusbar.grid(column=0, row=3, columnspan=1, sticky="ew")
 
     @in_gdb_thread
+    def connect_handlers(self):
+        gdb.events.stop.connect(self.stop_handler)
+        gdb.events.cont.connect(self.continue_handler)
+        gdb.events.gdb_exiting.connect(self.cleanup_handler)
+        gdb.events.exited.connect(self.exited_handler)
+        gdb.events.before_prompt.connect(self.before_prompt_handler)
+
+    @in_gdb_thread
     def stop_handler(self, event):
         if self.gui_alive and self.root is not None:
             if isinstance(event, gdb.BreakpointEvent):
@@ -477,10 +501,6 @@ class DebuggerGUI:
 
     @in_gdb_thread
     def refresh_current_state(self):
-        # Wait for the GUI to be initialized
-        while self.root is None:
-            time.sleep(0.1)
-
         # When there is a running frame
         try:
             frames = self.collect_frame_data("step")
@@ -839,7 +859,7 @@ class DebuggerGUI:
 
 class GuiThread(gdb.Thread):
     def __init__(self, gui):
-        super().__init__()
+        super().__init__(name="GUI", daemon=True)
         self.gui = gui
 
     def run(self):
@@ -861,7 +881,15 @@ class GuiEnableCommand (gdb.Command):
     def invoke(self, arg, from_tty):
         global debugger_gui
         if debugger_gui is None:
-            debugger_gui = DebuggerGUI()
+            gui = DebuggerGUI()
+            if not gui.startup_done.wait(10.0):
+                raise gdb.GdbError("timed out waiting for the GUI to start")
+            if gui.startup_error is not None:
+                if gui.startup_traceback is not None:
+                    gdb.write(gui.startup_traceback, stream=gdb.STDERR)
+                raise gdb.GdbError(f"cannot open GUI window: {gui.startup_error}")
+            gui.connect_handlers()
+            debugger_gui = gui
         else:
             debugger_gui.reopen()
         gdb.post_event(lambda: debugger_gui.refresh_current_state())
