@@ -2,6 +2,8 @@
 
 A graphical debugger interface for GDB written in Python, designed to complement the command line and TUI interfaces.
 
+<img width="1517" height="906" alt="image" src="https://github.com/user-attachments/assets/ecb7ab1b-f001-450d-9ba2-a1b887231a30" />
+
 ## Overview
 
 This is a proof-of-concept GUI for GDB that leverages the GDB Python API to provide a modern debugging experience. It runs alongside GDB and provides visual representations of your debugging session including source code, disassembly, breakpoints, stack frames, and local variables.
