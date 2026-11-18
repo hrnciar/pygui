@@ -476,6 +476,28 @@ class DebuggerGUI:
         return breakpoint_data
 
     @in_gdb_thread
+    def get_thread_data(self):
+        thread_data = []
+        try:
+            treads = gdb.selected_inferior().threads()
+            if threads:
+                for thread in threads:
+                    current_thread = gdb.selected_thread()
+                    thread.switch()
+                    function_name = gdb.newest_frame().name()
+                    thread_data.append({
+                        'number': breakpoint.number,
+                        'location': breakpoint.location,
+                        'enabled': breakpoint.enabled,
+                        'hit_count': breakpoint.hit_count,
+                        'source_file': source[0] if source else None,
+                        'source_line': source[1] if source else None,
+                    })
+        except Exception:
+            pass
+        return thread_data
+
+    @in_gdb_thread
     def get_locals_data(self, frame):
         locals_list = []
         try:
